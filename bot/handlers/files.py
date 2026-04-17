@@ -60,6 +60,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc:
         return
+    if not doc.file_name or not doc.file_name.lower().endswith(".txt"):
+        await update.message.reply_text("Принимаю только .txt файлы.")
+        return
     if doc.file_size > 20 * 1024 * 1024:
         await update.message.reply_text("Файл слишком большой (макс. 20 MB).")
         return
