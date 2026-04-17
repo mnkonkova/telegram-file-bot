@@ -1,0 +1,4 @@
+python-telegram-bot>=20.0,<22
+openai>=1.0,<2
+mcp>=1.0,<2
+chromadb>=0.5,<1
