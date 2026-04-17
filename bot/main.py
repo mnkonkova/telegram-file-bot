@@ -74,7 +74,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     label = f"📁 {e['name']}/"
                 else:
                     label = f"📄 {e['name']} ({_format_size(e['size'])})"
-                kb.append([InlineKeyboardButton(label, callback_data=f"dl:{e['name']}")])
+                kb.append([
+                InlineKeyboardButton(label, callback_data=f"dl:{e['name']}"),
+                InlineKeyboardButton("🗑", callback_data=f"rm:{e['name']}"),
+            ])
             kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -95,6 +98,34 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             document=open(path, "rb"),
             filename=filename,
         )
+        kb = [
+            [InlineKeyboardButton("📂 К файлам", callback_data="files")],
+            [InlineKeyboardButton("🔙 Меню", callback_data="back")],
+        ]
+        await query.message.reply_text("Выбери действие:", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif data.startswith("rm:"):
+        filename = data[3:]
+        kb = [
+            [
+                InlineKeyboardButton("Да, удалить", callback_data=f"rm_yes:{filename}"),
+                InlineKeyboardButton("Отмена", callback_data="files"),
+            ],
+        ]
+        await query.message.edit_text(
+            f"Удалить файл {filename}?",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
+
+    elif data.startswith("rm_yes:"):
+        from bot.services.file_manager import delete_file
+        filename = data[7:]
+        try:
+            delete_file(filename)
+            await query.message.edit_text(f"Файл удалён: {filename}")
+        except Exception as e:
+            await query.message.edit_text(f"Ошибка: {e}")
+        # Return to file list after a moment
         kb = [
             [InlineKeyboardButton("📂 К файлам", callback_data="files")],
             [InlineKeyboardButton("🔙 Меню", callback_data="back")],
