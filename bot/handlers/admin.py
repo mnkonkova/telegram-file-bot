@@ -10,7 +10,12 @@ async def cmd_adduser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Использование: /adduser @username")
         return
     username = context.args[0].lstrip("@")
-    if add_user(username):
+    try:
+        added = add_user(username)
+    except ValueError as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+        return
+    if added:
         await update.message.reply_text(f"Пользователь @{username} добавлен.")
     else:
         await update.message.reply_text(f"@{username} уже в списке.")
@@ -22,7 +27,12 @@ async def cmd_removeuser(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Использование: /removeuser @username")
         return
     username = context.args[0].lstrip("@")
-    if remove_user(username):
+    try:
+        removed = remove_user(username)
+    except ValueError as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+        return
+    if removed:
         await update.message.reply_text(f"Пользователь @{username} удалён.")
     else:
         await update.message.reply_text(f"@{username} не найден в списке.")

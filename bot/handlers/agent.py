@@ -6,6 +6,7 @@ from telegram.ext import ContextTypes
 
 from bot.middleware.auth import require_auth
 from bot.services.ai_agent import run_agent
+from bot.services.rate_limit import ask_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _process_question(update: Update, question: str):
+    username = update.effective_user.username if update.effective_user else None
+    if not ask_limiter.allow(username):
+        await update.message.reply_text("Слишком часто. Подожди немного.")
+        return
     status_msg = await update.message.reply_text("⏳ Запускаю агента...")
     last_text = status_msg.text
 

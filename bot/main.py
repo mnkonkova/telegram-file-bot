@@ -11,11 +11,13 @@ from telegram.ext import (
 )
 
 from bot.config import TELEGRAM_BOT_TOKEN
-from bot.middleware.auth import is_admin, require_auth
+from bot.middleware.auth import is_admin, is_allowed, require_auth
 from bot.handlers.admin import cmd_adduser, cmd_removeuser, cmd_users
 from bot.handlers.agent import cmd_ask, handle_text
 from bot.handlers.files import cmd_cat, cmd_delete, cmd_files, handle_document
 from bot.mcp_client import start_mcp, stop_mcp
+from bot.services.error_reporter import error_handler, remember_chat_id
+from bot.services.heartbeat import start_heartbeat, stop_heartbeat
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -39,6 +41,13 @@ def _main_keyboard(admin: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+async def track_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+    if user and chat:
+        remember_chat_id(user.username, chat.id)
+
+
 @require_auth
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -47,11 +56,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, reply_markup=_main_keyboard(admin))
 
 
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # Telegram bot upload limit
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = update.effective_user
-    if not user:
+    if not user or not is_allowed(user.username):
+        await query.message.reply_text("Доступ запрещён.")
         return
     admin = is_admin(user.username)
     data = query.data
@@ -83,10 +96,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("dl:"):
         import os
-        from bot.config import STORAGE_PATH
-        from bot.services.file_manager import _safe_path
+        from bot.services.file_manager import _safe_path, _validate_filename
         filename = data[3:]
         try:
+            _validate_filename(filename)
             path = _safe_path(filename)
         except ValueError:
             await query.message.reply_text("Недопустимый путь.")
@@ -94,10 +107,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not os.path.isfile(path):
             await query.message.reply_text(f"Файл не найден: {filename}")
             return
-        await query.message.reply_document(
-            document=open(path, "rb"),
-            filename=filename,
-        )
+        if os.path.getsize(path) > MAX_DOWNLOAD_BYTES:
+            await query.message.reply_text(
+                f"Файл слишком большой для отправки (>{MAX_DOWNLOAD_BYTES // 1024 // 1024} MB)."
+            )
+            return
+        with open(path, "rb") as fh:
+            await query.message.reply_document(document=fh, filename=filename)
         kb = [
             [InlineKeyboardButton("📂 К файлам", callback_data="files")],
             [InlineKeyboardButton("🔙 Меню", callback_data="back")],
@@ -195,10 +211,11 @@ async def handle_text_or_action(update: Update, context: ContextTypes.DEFAULT_TY
     if awaiting == "adduser" and is_admin(user.username):
         from bot.middleware.auth import add_user
         username = update.message.text.strip().lstrip("@")
-        if add_user(username):
-            text = f"Пользователь @{username} добавлен."
-        else:
-            text = f"@{username} уже в списке."
+        try:
+            added = add_user(username)
+            text = f"Пользователь @{username} добавлен." if added else f"@{username} уже в списке."
+        except ValueError as e:
+            text = f"Ошибка: {e}"
         context.user_data.pop("awaiting", None)
         await update.message.reply_text(text, reply_markup=_main_keyboard(is_admin(user.username)))
         return
@@ -206,10 +223,11 @@ async def handle_text_or_action(update: Update, context: ContextTypes.DEFAULT_TY
     if awaiting == "removeuser" and is_admin(user.username):
         from bot.middleware.auth import remove_user
         username = update.message.text.strip().lstrip("@")
-        if remove_user(username):
-            text = f"Пользователь @{username} удалён."
-        else:
-            text = f"@{username} не найден в списке."
+        try:
+            removed = remove_user(username)
+            text = f"Пользователь @{username} удалён." if removed else f"@{username} не найден в списке."
+        except ValueError as e:
+            text = f"Ошибка: {e}"
         context.user_data.pop("awaiting", None)
         await update.message.reply_text(text, reply_markup=_main_keyboard(is_admin(user.username)))
         return
@@ -236,11 +254,13 @@ async def post_init(app):
     logger.info("Starting MCP filesystem server...")
     await start_mcp()
     logger.info("MCP ready.")
+    await start_heartbeat()
 
 
 async def post_shutdown(app):
     logger.info("Stopping MCP...")
     await stop_mcp()
+    await stop_heartbeat()
 
 
 def main():
@@ -251,6 +271,12 @@ def main():
         .post_shutdown(post_shutdown)
         .build()
     )
+
+    # Track chat_ids for error reporting (group=-1 runs before other handlers)
+    app.add_handler(MessageHandler(filters.ALL, track_chat_id), group=-1)
+
+    # Error handler (sends tracebacks to admin)
+    app.add_error_handler(error_handler)
 
     # Start
     app.add_handler(CommandHandler("start", cmd_start))

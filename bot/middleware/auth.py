@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from functools import wraps
 
 from telegram import Update
@@ -8,6 +9,14 @@ from telegram.ext import ContextTypes
 from bot.config import ADMIN_USERNAMES, DATA_PATH
 
 USERS_FILE = os.path.join(DATA_PATH, "allowed_users.json")
+
+# Telegram username rules: 5-32 chars, [A-Za-z0-9_]. We're permissive on length
+# (bots may store handles set before the rule existed) but strict on charset.
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+
+
+def _valid_username(username: str) -> bool:
+    return bool(_USERNAME_RE.match(username))
 
 
 def _load_users() -> set[str]:
@@ -39,6 +48,8 @@ def is_allowed(username: str | None) -> bool:
 
 def add_user(username: str) -> bool:
     username = username.lstrip("@").lower()
+    if not _valid_username(username):
+        raise ValueError("Недопустимый username")
     users = _load_users()
     if username in {u.lower() for u in users}:
         return False
@@ -49,6 +60,8 @@ def add_user(username: str) -> bool:
 
 def remove_user(username: str) -> bool:
     username = username.lstrip("@").lower()
+    if not _valid_username(username):
+        raise ValueError("Недопустимый username")
     users = _load_users()
     lower_users = {u.lower() for u in users}
     if username not in lower_users:

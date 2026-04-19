@@ -22,7 +22,12 @@ _openai: OpenAI | None = None
 def _get_openai() -> OpenAI:
     global _openai
     if _openai is None:
-        _openai = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        _openai = OpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url=DEEPSEEK_BASE_URL,
+            max_retries=3,
+            timeout=60.0,
+        )
     return _openai
 
 

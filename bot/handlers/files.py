@@ -9,6 +9,7 @@ from bot.services.file_manager import (
     read_file,
     save_file,
 )
+from bot.services.rate_limit import upload_limiter
 
 
 @require_auth
@@ -49,16 +50,23 @@ async def cmd_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (FileNotFoundError, ValueError) as e:
         await update.message.reply_text(f"Ошибка: {e}")
         return
-    msg = f"📄 {filename}\n\n```\n{content}\n```"
+    msg = f"📄 {filename}\n\n{content}"
     if truncated:
         msg += "\n\n⚠️ Файл обрезан (слишком большой)"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    # Plain text: avoids Markdown injection via filename or content.
+    await update.message.reply_text(msg)
 
 
 @require_auth
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc:
+        return
+    username = update.effective_user.username if update.effective_user else None
+    if not upload_limiter.allow(username):
+        await update.message.reply_text(
+            "Слишком часто. Попробуй через минуту."
+        )
         return
     if not doc.file_name or not doc.file_name.lower().endswith(".txt"):
         await update.message.reply_text("Принимаю только .txt файлы.")

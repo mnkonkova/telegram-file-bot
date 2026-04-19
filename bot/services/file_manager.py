@@ -1,16 +1,34 @@
 import json
 import os
+import re
 
 from bot.config import DATA_PATH, STORAGE_PATH
 
 INDEX_FILE = os.path.join(DATA_PATH, "file_index.json")
 PREVIEW_CHARS = 500
+MAX_FILENAME_LEN = 200
+MAX_CHUNKS_PER_FILE = 100
+_VALID_FILENAME_RE = re.compile(r"^[^/\\\x00-\x1f]+$")
+
+
+def _validate_filename(filename: str) -> None:
+    if not filename or filename in (".", "..") or ".." in filename.split("/"):
+        raise ValueError("Недопустимое имя файла")
+    if len(filename) > MAX_FILENAME_LEN:
+        raise ValueError("Слишком длинное имя файла")
+    if not _VALID_FILENAME_RE.match(filename):
+        raise ValueError("Недопустимое имя файла")
 
 
 def _safe_path(filename: str) -> str:
-    joined = os.path.join(STORAGE_PATH, filename)
+    storage_real = os.path.realpath(STORAGE_PATH)
+    joined = os.path.join(storage_real, filename)
     real = os.path.realpath(joined)
-    if not real.startswith(os.path.realpath(STORAGE_PATH)):
+    try:
+        if os.path.commonpath([real, storage_real]) != storage_real:
+            raise ValueError("Недопустимый путь")
+    except ValueError:
+        # commonpath raises ValueError if paths are on different drives (Windows)
         raise ValueError("Недопустимый путь")
     return real
 
@@ -43,10 +61,19 @@ def _is_text_file(filename: str) -> bool:
 
 
 def save_file(data: bytes, filename: str) -> str | list[str]:
-    if ".." in filename or "/" in filename or "\\" in filename:
-        raise ValueError("Недопустимое имя файла")
+    _validate_filename(filename)
 
     if _is_text_file(filename) and len(data) > CHUNK_SIZE:
+        chunk_count = (len(data) + CHUNK_SIZE - 1) // CHUNK_SIZE
+        if chunk_count > MAX_CHUNKS_PER_FILE:
+            raise ValueError(
+                f"Файл слишком большой: разбивается на {chunk_count} частей "
+                f"(лимит {MAX_CHUNKS_PER_FILE})"
+            )
+        name, ext = os.path.splitext(filename)
+        first_part = f"{name}_part1{ext}"
+        if os.path.exists(_safe_path(first_part)):
+            raise ValueError(f"Файл с таким именем уже существует: {filename}")
         parts = _save_chunked(data, filename)
         for p in parts:
             index_file(p)
@@ -54,6 +81,8 @@ def save_file(data: bytes, filename: str) -> str | list[str]:
         return parts
 
     path = _safe_path(filename)
+    if os.path.exists(path):
+        raise ValueError(f"Файл с таким именем уже существует: {filename}")
     with open(path, "wb") as f:
         f.write(data)
     index_file(filename)
@@ -81,13 +110,14 @@ def _save_chunked(data: bytes, filename: str) -> list[str]:
         chunk = text[i : i + CHUNK_SIZE]
         part_name = f"{name}_part{len(parts) + 1}{ext}"
         path = _safe_path(part_name)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(chunk)
         parts.append(part_name)
     return parts
 
 
 def delete_file(filename: str) -> None:
+    _validate_filename(filename)
     path = _safe_path(filename)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Файл не найден: {filename}")
@@ -103,10 +133,11 @@ def delete_file(filename: str) -> None:
 
 
 def read_file(filename: str, max_chars: int = 4000) -> str:
+    _validate_filename(filename)
     path = _safe_path(filename)
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Файл не найден: {filename}")
-    with open(path, "r", errors="replace") as f:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read(max_chars + 1)
     truncated = len(content) > max_chars
     if truncated:
@@ -154,7 +185,7 @@ def _save_index(index: dict) -> None:
 
 def _make_preview(filepath: str) -> str:
     try:
-        with open(filepath, "r", errors="replace") as f:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             text = f.read(PREVIEW_CHARS + 1)
         if len(text) > PREVIEW_CHARS:
             text = text[:PREVIEW_CHARS] + "..."
